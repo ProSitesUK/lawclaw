@@ -49,6 +49,7 @@ class ClaudeCodeRunner
             ->env([
                 'HOME' => env('HOME', '/home/server-2idet'),
                 'PATH' => '/home/server-2idet/.npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+                'CLAUDE_CODE_OAUTH_TOKEN' => env('CLAUDE_CODE_OAUTH_TOKEN', ''),
             ])
             ->input($fullPrompt)
             ->run($cmd);
