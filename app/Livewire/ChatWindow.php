@@ -58,7 +58,7 @@ class ChatWindow extends Component
     protected function kickWorker(): void
     {
         $base = base_path();
-        $php = PHP_BINARY;
+        $php = "/usr/bin/php8.5";
         $cmd = "cd {$base} && nohup {$php} artisan queue:work --once --stop-when-empty --tries=1 --timeout=1800 > storage/logs/worker.log 2>&1 &";
         @exec($cmd);
     }
