@@ -82,8 +82,14 @@ class ChatWindow extends Component
         $this->input = '';
         $this->pending = true;
 
-        // Dispatch to queue (or run sync if queue not running)
+        // Queue the job (database driver) so the UI returns instantly
         ProcessChatMessage::dispatch($session->id, $assistantMsg->id, $text);
+
+        // Fire-and-forget a background worker to process this single job
+        $base = base_path();
+        $php = PHP_BINARY;
+        $cmd = "cd {$base} && nohup {$php} artisan queue:work --once --stop-when-empty --tries=1 > storage/logs/worker.log 2>&1 &";
+        @exec($cmd);
     }
 
     public function render()
