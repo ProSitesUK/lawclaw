@@ -1,6 +1,6 @@
 <div x-data="{ collapsed: localStorage.getItem('lc_sb')==='1' }"
      x-init="$watch('collapsed', v => localStorage.setItem('lc_sb', v?'1':'0'))"
-     class="flex h-[calc(100vh-4rem)] bg-[#0a0a0a] text-gray-100"
+     class="flex h-full bg-[#0a0a0a] text-gray-100"
      wire:poll.3s>
 
     <!-- Sidebar -->
