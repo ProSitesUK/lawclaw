@@ -3,26 +3,23 @@
 namespace App\Livewire;
 
 use App\Jobs\ProcessChatMessage;
+use App\Jobs\RunSubAgentJob;
 use App\Models\ChatSession;
 use App\Models\Message;
 use Illuminate\Support\Facades\Auth;
-use Livewire\Attributes\On;
 use Livewire\Component;
 
 class ChatWindow extends Component
 {
     public ?int $sessionId = null;
     public string $input = '';
-    public bool $pending = false;
 
     public function mount(?int $sessionId = null): void
     {
         if ($sessionId) {
             $this->sessionId = $sessionId;
         } else {
-            // auto-pick most recent or create one
-            $session = Auth::user()->chatSessions()->latest()->first()
-                ?? $this->newSession();
+            $session = Auth::user()->chatSessions()->latest()->first() ?? $this->newSession();
             $this->sessionId = $session->id;
         }
     }
@@ -58,6 +55,14 @@ class ChatWindow extends Component
         }
     }
 
+    protected function kickWorker(): void
+    {
+        $base = base_path();
+        $php = PHP_BINARY;
+        $cmd = "cd {$base} && nohup {$php} artisan queue:work --once --stop-when-empty --tries=1 --timeout=1800 > storage/logs/worker.log 2>&1 &";
+        @exec($cmd);
+    }
+
     public function send(): void
     {
         $text = trim($this->input);
@@ -65,31 +70,62 @@ class ChatWindow extends Component
 
         $session = Auth::user()->chatSessions()->findOrFail($this->sessionId);
 
-        // Save user message
         $session->messages()->create([
             'role' => 'user',
             'content' => $text,
             'status' => 'complete',
         ]);
 
-        // Pre-create assistant placeholder
+        $this->input = '';
+
+        // /agent slash-command → spawn a sub-agent
+        if (preg_match('/^\/agent\s+(.+)/is', $text, $m)) {
+            $task = trim($m[1]);
+            $slug = 'agent-' . now()->format('YmdHis') . '-' . substr(md5($task), 0, 6);
+            $workdir = storage_path('app/lawclaw/projects/' . $slug);
+            if (!is_dir($workdir)) @mkdir($workdir, 0755, true);
+
+            $agentMsg = $session->messages()->create([
+                'role' => 'agent',
+                'content' => "🤖 Sub-agent spawned\n\nTask: {$task}\n\nWorking…",
+                'status' => 'pending',
+                'meta' => [
+                    'task' => $task,
+                    'workdir' => $workdir,
+                    'slug' => $slug,
+                ],
+            ]);
+
+            RunSubAgentJob::dispatch($agentMsg->id, $task, $workdir);
+            $this->kickWorker();
+            return;
+        }
+
+        // Normal chat
         $assistantMsg = $session->messages()->create([
             'role' => 'assistant',
             'content' => '',
             'status' => 'pending',
         ]);
 
-        $this->input = '';
-        $this->pending = true;
-
-        // Queue the job (database driver) so the UI returns instantly
         ProcessChatMessage::dispatch($session->id, $assistantMsg->id, $text);
+        $this->kickWorker();
+    }
 
-        // Fire-and-forget a background worker to process this single job
-        $base = base_path();
-        $php = PHP_BINARY;
-        $cmd = "cd {$base} && nohup {$php} artisan queue:work --once --stop-when-empty --tries=1 > storage/logs/worker.log 2>&1 &";
-        @exec($cmd);
+    public function publishAgent(int $messageId): void
+    {
+        $msg = Message::whereHas('chatSession', fn($q) => $q->where('user_id', Auth::id()))
+            ->where('role', 'agent')
+            ->findOrFail($messageId);
+
+        $meta = $msg->meta ?? [];
+        $workdir = $meta['workdir'] ?? null;
+        if (!$workdir || !is_dir($workdir)) return;
+
+        \App\Jobs\PublishAgentJob::dispatch($msg->id);
+        $meta['publishing'] = true;
+        $msg->update(['meta' => $meta]);
+        $this->kickWorker();
     }
 
     public function render()
@@ -98,7 +134,7 @@ class ChatWindow extends Component
         $sessions = $user->chatSessions()->latest()->get();
         $session = $this->sessionId ? $user->chatSessions()->with('messages')->find($this->sessionId) : null;
         $messages = $session ? $session->messages : collect();
-        $hasPending = $messages->where('status', 'pending')->count() > 0 || $messages->where('status', 'streaming')->count() > 0;
+        $hasPending = $messages->whereIn('status', ['pending', 'streaming'])->count() > 0;
 
         return view('livewire.chat-window', [
             'sessions' => $sessions,
